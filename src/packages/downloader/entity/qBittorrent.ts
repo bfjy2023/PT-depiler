@@ -218,7 +218,8 @@ export default class QBittorrent extends AbstractBittorrentClient<TorrentClientC
   async ping(): Promise<boolean> {
     try {
       const pong = await this.login();
-      this.isLogin = pong.data === "Ok.";
+      // qbittorrent 5.2.0+ returns 204 No Content with empty body, older versions return 200 OK with "Ok." body
+      this.isLogin = pong.data === "Ok." || pong.status === 204;
       return this.isLogin;
     } catch (e) {
       return false;
@@ -281,6 +282,13 @@ export default class QBittorrent extends AbstractBittorrentClient<TorrentClientC
   private async request<T>(path: string, config: AxiosRequestConfig = {}): Promise<AxiosResponse<T>> {
     if (this.isLogin === null) {
       await this.ping();
+    }
+
+    if (config.method?.toLowerCase() === "post") {
+      config.headers = {
+        ...(config.headers ?? {}),
+        "content-type": "application/x-www-form-urlencoded",
+      };
     }
 
     return await axios.request<T>({
@@ -491,33 +499,33 @@ export default class QBittorrent extends AbstractBittorrentClient<TorrentClientC
 
   // 注意方法虽然支持一次对多个种子进行操作，但仍建议每次均只操作一个种子
   async pauseTorrent(hashes: string | string[] | "all"): Promise<boolean> {
-    const params = {
+    const data = {
       hashes: hashes === "all" ? "all" : normalizePieces(hashes),
     };
     // qBittorrent 5.0+ (WebAPI 2.11.0+) renamed /torrents/pause to /torrents/stop
     const endpoint = (await this.isApiVersionAtLeast(2, 11)) ? "/torrents/stop" : "/torrents/pause";
-    await this.request(endpoint, { params });
+    await this.request(endpoint, { method: "post", data });
     return true;
   }
 
   // 注意方法虽然支持一次对多个种子进行操作，但仍建议每次均只操作一个种子
   async removeTorrent(hashes: string | string[] | "all", removeData: boolean = false): Promise<boolean> {
-    const params = {
+    const data = {
       hashes: hashes === "all" ? "all" : normalizePieces(hashes),
-      removeData,
+      deleteFiles: removeData,
     };
-    await this.request("/torrents/delete", { params });
+    await this.request("/torrents/delete", { method: "post", data });
     return true;
   }
 
   // 注意方法虽然支持一次对多个种子进行操作，但仍建议每次均只操作一个种子
   async resumeTorrent(hashes: string | string[] | "all"): Promise<any> {
-    const params = {
+    const data = {
       hashes: hashes === "all" ? "all" : normalizePieces(hashes),
     };
     // qBittorrent 5.0+ (WebAPI 2.11.0+) renamed /torrents/resume to /torrents/start
     const endpoint = (await this.isApiVersionAtLeast(2, 11)) ? "/torrents/start" : "/torrents/resume";
-    await this.request(endpoint, { params });
+    await this.request(endpoint, { method: "post", data });
     return true;
   }
 
@@ -538,5 +546,21 @@ export default class QBittorrent extends AbstractBittorrentClient<TorrentClientC
   public override async getClientLabels(): Promise<string[]> {
     const { data } = await this.request<string[]>("/torrents/tags");
     return data;
+  }
+
+  async getTorrentTrackers(torrent: CTorrent): Promise<string[]> {
+    // 首先尝试从 torrent.magnet_uri 中解析出 tracker 列表
+    if (typeof torrent === "object" && typeof torrent?.raw?.magnet_uri === "string") {
+      const queryString = torrent.raw.magnet_uri.split("?")[1] || "";
+      const params = new URLSearchParams(queryString);
+
+      // URLSearchParams 已经会对参数值进行解码，这里直接返回即可，避免二次解码导致 tracker URL 被破坏
+      return params.getAll("tr");
+    }
+
+    // 不然，则从客户端直接请求获取
+    const hash = torrent.infoHash || (torrent.id as string);
+    const { data } = await this.request<Array<{ url: string }>>("/torrents/trackers", { params: { hash } });
+    return data.map((t) => t.url);
   }
 }
