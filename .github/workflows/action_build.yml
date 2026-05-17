@@ -9,6 +9,7 @@ on:
     outputs:
       version:
         value: ${{ jobs.build.outputs.version }}
+   workflow_dispatch:  # 添加这一行
 
 jobs:
   build:
