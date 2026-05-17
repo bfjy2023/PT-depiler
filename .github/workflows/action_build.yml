@@ -3,13 +3,15 @@ name: Build Action Release
 on:
   push:
     branches: ["master"]
+    tags:
+      - 'v*'  # 当推送 v开头 的标签时触发，比如 v1.0.0
   pull_request:
     branches: ["master"]
   workflow_call:
     outputs:
       version:
         value: ${{ jobs.build.outputs.version }}
-  workflow_dispatch:  # 添加这一行
+  workflow_dispatch: # 保留手动触发
 
 jobs:
   build:
@@ -18,14 +20,14 @@ jobs:
       version: ${{ steps.zip_chrome.outputs.extensionVersion }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && '1' || '0' }} # 根据事件类型动态设置 fetch-depth
+          fetch-depth: ${{ github.event_name == 'pull_request' && '1' || '0' }}
 
       - uses: pnpm/action-setup@v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ">=23.7.0"
           cache: "pnpm"
@@ -54,7 +56,7 @@ jobs:
           name: build-dist-firefox
           path: dist-firefox
 
-      - run: mkdir -p build-zip
+      - run: mkdir -p build
 
       - id: zip_chrome
         name: Build Zip For Chrome
@@ -88,6 +90,7 @@ jobs:
 
       - name: Upload Built Crx to action
         uses: actions/upload-artifact@v4
+        if: ${{ env.CHROME_SELF_SIGN_CRX_PRIVATE_KEY != '' }}
         with:
           path: build/extension.crx
           name: build-crx-${{ steps.zip_chrome.outputs.extensionVersion }}
@@ -100,3 +103,40 @@ jobs:
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != '' }}
         run: pnpm action:upload_telegram
         continue-on-error: true
+
+  # ========== 新增：发布到 GitHub Release ==========
+  release:
+    needs: build # 等待 build 完成
+    runs-on: ubuntu-latest
+    # 只在推送 tag 或者 手动触发时执行（可以根据需求改条件）
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-zip-${{ needs.build.outputs.version }}
+          path: build
+
+      # 如果有 CRX 也下载
+      - name: Download CRX artifact
+        uses: actions/download-artifact@v4
+        if: ${{ secrets.CHROME_SELF_SIGN_CRX_PRIVATE_KEY != '' }}
+        with:
+          name: build-crx-${{ needs.build.outputs.version }}
+          path: build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          # 把产物都附加到 Release
+          files: |
+            build/*.zip
+            build/*.crx
+          # 自动生成版本名（如果是 tag 就用 tag 名，否则用扩展版本号）
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', needs.build.outputs.version) }}
+          # 如果是新 tag 自动生成草稿，你可以手动编辑后发布
+          draft: true
+          prerelease: false
+        env:
+          # 使用 GitHub 自动提供的 token，不需要额外配置
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
