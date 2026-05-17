@@ -120,7 +120,7 @@ jobs:
       # 如果有 CRX 也下载
       - name: Download CRX artifact
         uses: actions/download-artifact@v4
-        if: ${{ secrets.CHROME_SELF_SIGN_CRX_PRIVATE_KEY != '' }}
+        #if: ${{ secrets.CHROME_SELF_SIGN_CRX_PRIVATE_KEY != '' }}
         with:
           name: build-crx-${{ needs.build.outputs.version }}
           path: build
