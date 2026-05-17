@@ -91,6 +91,8 @@ jobs:
   release:
     needs: build # 等待构建完成
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     # 只有推送 tag 或手动触发时才发布，PR/普通push不发布
     if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
     steps:
